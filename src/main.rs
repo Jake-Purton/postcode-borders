@@ -28,16 +28,16 @@ pub struct House {
 #[derive(Resource, Clone)]
 pub struct HouseVec(Option<Vec<House>>);
 
-
 #[derive(Resource)]
 pub struct BorderPixels {
-    pixels: Box<[[(u16, u16); HEIGHT as usize]; WIDTH as usize]>,
+    pixels: Box<Vec<Vec<(u16, u16)>>>, // Updated to use Box<Vec<Vec<(u16, u16)>>>
 }
 
 impl BorderPixels {
     pub fn new() -> Self {
+        let pixels = vec![vec![(1001, 1001); HEIGHT as usize]; WIDTH as usize];
         Self {
-            pixels: Box::new([[(1001, 1001); HEIGHT as usize]; WIDTH as usize]),
+            pixels: Box::new(pixels),
         }
     }
 }
@@ -67,7 +67,7 @@ fn main() {
 }
 
 fn get_border_points(
-    pixels: ResMut<BorderPixels>,
+    pixels: ResMut<BorderPixels>, // Updated to use the new structure
     mut images: ResMut<Assets<Image>>,
     keys: Res<ButtonInput<KeyCode>>,
     id: Res<ImageHandleRes>,
@@ -79,7 +79,6 @@ fn get_border_points(
 
     let mut start_pixel = None;
 
-    
     for (x, row) in pixels.pixels.iter().enumerate() {
         for (y, &pixel) in row.iter().enumerate() {
             if pixel != (1001, 1001) {
@@ -101,7 +100,7 @@ fn get_border_points(
     println!("First non-default pixel found at ({}, {}): {:?}", x, y, nearest);
 
     // wether the pixels have been visited yet
-    let mut visited = [[false; HEIGHT as usize]; WIDTH as usize];
+    let mut visited = vec![vec![false; HEIGHT as usize]; WIDTH as usize]; // Updated to use Vec<Vec<bool>>
 
     // the queue that has the pixels x and y, 
     // along with the previous pixels nearest
@@ -230,7 +229,7 @@ fn draw_borders(
     house_vec: Res<HouseVec>,
     id: Res<ImageHandleRes>,
     mut images: ResMut<Assets<Image>>,
-    mut pixels: ResMut<BorderPixels>
+    mut pixels: ResMut<BorderPixels>, // Updated to use the new structure
 ) {
     if keys.just_pressed(KeyCode::Space) {
         if let Some(vec) = &house_vec.0 {
