@@ -14,10 +14,10 @@ const HEIGHT: u32 = 800;
 const WIDTH_F32: f32 = WIDTH as f32;
 const HEIGHT_F32: f32 = HEIGHT as f32;
 
-const RADIUS: f32 = 10.0;
+const SMOOTHING_RAD: f32 = 2.0;
 
 #[derive(Clone, Copy)]
-pub struct Point {
+pub struct House {
     pub pos: Vec2,
     pub group: u8,
     pub friends: u8,
@@ -26,7 +26,7 @@ pub struct Point {
 }
 
 #[derive(Resource, Clone)]
-pub struct PointVec(Option<Vec<Point>>);
+pub struct HouseVec(Option<Vec<House>>);
 
 
 #[derive(Resource)]
@@ -61,7 +61,7 @@ fn main() {
         .add_systems(Startup, setup)
         .add_systems(Update, (draw_borders, get_border_points))
         .insert_resource(ClearColor(Color::srgb(0.0, 0.0, 0.0))) // Set background color
-        .insert_resource(PointVec(None))
+        .insert_resource(HouseVec(None))
         .insert_resource(BorderPixels::new())
         .run();
 }
@@ -153,18 +153,87 @@ fn get_border_points(
             }
         }
     }
+}
 
+pub struct NearestHouses {
+    nearest: Vec<(usize, f32)>
+}
+
+impl NearestHouses {
+    pub fn new() -> Self {
+        return Self { nearest: Vec::new() };
+    }
+    
+    pub fn add(&mut self, point: (usize, f32)) {
+   
+        if self.nearest.is_empty() {
+            self.nearest.push(point);
+            return;
+        }
+
+
+        // sort into ascending distance
+        self.nearest.push(point);
+        self.nearest.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let nearest_point = self.nearest[0];
+
+        for i in 1..self.nearest.len() {
+            if self.nearest[i].1 > nearest_point.1 + SMOOTHING_RAD {
+                while self.nearest.len() > i {
+                    self.nearest.pop();
+                }
+
+                break;
+            }
+        }
+    }
+
+    pub fn is_border (&self, points: &Vec<House>) -> bool {
+
+        if self.nearest.len() <= 1 {
+            return false;
+        };
+
+        let last_group = points[self.nearest[0].0].group;
+
+        for i in 1..self.nearest.len() {
+            if points[self.nearest[i].0].group != last_group {
+                return true;
+            }
+        }
+
+        return false
+
+    }
+
+    pub fn get_houses(&self, points: &Vec<House>) -> Option<[(usize, f32); 2]> {
+        if self.nearest.len() <= 1 {
+            return None;
+        };
+
+        let last = self.nearest[0];
+        let last_group = points[last.0].group;
+
+        for i in 1..self.nearest.len() {
+            if points[self.nearest[i].0].group != last_group {
+                return Some([last, self.nearest[i]]);
+            }
+        }
+
+        return None
+    }
 }
 
 fn draw_borders(
     keys: Res<ButtonInput<KeyCode>>,
-    point_vec: Res<PointVec>,
+    house_vec: Res<HouseVec>,
     id: Res<ImageHandleRes>,
     mut images: ResMut<Assets<Image>>,
     mut pixels: ResMut<BorderPixels>
 ) {
     if keys.just_pressed(KeyCode::Space) {
-        if let Some(vec) = &point_vec.0 {
+        if let Some(vec) = &house_vec.0 {
             let handle = Handle::Weak(id.0);
 
             if let Some(image) = images.get_mut(&handle) {
@@ -175,44 +244,32 @@ fn draw_borders(
                 (0..HEIGHT).into_par_iter().for_each(|y| {
                     for x in 0..WIDTH {
 
-
-                        // maybe make it so that nearest is a vector, and if a distance is within 3.0 of the others
-                        // then it gets added, however if one is more than 3.0 away they get removed. Then the point
-                        // is only added to the border if nearest.len() >= 2
-                        // if there are at least 2 unique postcodes in that
-                        let mut nearest: [(usize, f32); 2] =
-                            [(0, f32::INFINITY), (0, f32::INFINITY)];
+                        let mut nearest: NearestHouses = NearestHouses::new();
                         let x = x as f32;
                         let y = y as f32;
 
-                        for (i, point) in vec.iter().enumerate() {
-                            let dist = point.pos.distance(Vec2 { x, y });
+                        for (i, house) in vec.iter().enumerate() {
+                            let dist = house.pos.distance(Vec2 { x, y });
 
-                            
-                            if nearest[0].1 > nearest[1].1 {
-                                if dist < nearest[0].1 {
-                                    nearest[0] = (i, dist)
-                                }
-                            } else if dist < nearest[1].1 {
-                                nearest[1] = (i, dist)
-                            }
+                            nearest.add((i, dist));
                         }
 
-                        if (nearest[0].1 - nearest[1].1).abs() <= 3.0
-                            && vec[nearest[0].0].group != vec[nearest[1].0].group
+                        if nearest.is_border(&vec)
                         {
                             let nx = x as usize;
                             let ny = y as usize;
 
+                            let nearest_houses = nearest.get_houses(&vec).unwrap();
+
                             let mut pixels_data = pixels_data.lock().unwrap();
-                            pixels_data[nx][ny] = (nearest[0].0 as u16, nearest[1].0 as u16);
+                            pixels_data[nx][ny] = (nearest_houses[0].0 as u16, nearest_houses[1].0 as u16);
 
                             if nx < WIDTH as usize && ny < HEIGHT as usize {
                                 let start = (nx + (ny * WIDTH as usize)) * 4;
 
                                 // Merge the colors by averaging their RGBA values
-                                let color1 = pick_colour(vec[nearest[0].0].group);
-                                let color2 = pick_colour(vec[nearest[1].0].group);
+                                let color1 = pick_colour(vec[nearest_houses[0].0].group);
+                                let color2 = pick_colour(vec[nearest_houses[1].0].group);
 
                                 let merged_color = [
                                     ((color1[0] as u16 + color2[0] as u16) / 2) as u8,
@@ -229,10 +286,12 @@ fn draw_borders(
                 });
             }
         }
+
+        println!("finished")
     }
 }
 
-fn setup(mut commands: Commands, mut vec: ResMut<PointVec>, mut images: ResMut<Assets<Image>>) {
+fn setup(mut commands: Commands, mut vec: ResMut<HouseVec>, mut images: ResMut<Assets<Image>>) {
     let mut rng = rand::rng();
 
     vec.0 = Some(Vec::new());
@@ -259,8 +318,8 @@ fn setup(mut commands: Commands, mut vec: ResMut<PointVec>, mut images: ResMut<A
             group = 4;
         }
 
-        if let Some(ref mut points) = vec.0 {
-            points.push(Point {
+        if let Some(ref mut houses) = vec.0 {
+            houses.push(House {
                 pos: Vec2::new(x, y),
                 group,
                 friends: 0,
