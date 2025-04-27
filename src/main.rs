@@ -14,7 +14,7 @@ const HEIGHT: u32 = 800;
 const WIDTH_F32: f32 = WIDTH as f32;
 const HEIGHT_F32: f32 = HEIGHT as f32;
 
-const SMOOTHING_RAD: f32 = 2.0;
+const SMOOTHING_RAD: f32 = 1.5;
 
 #[derive(Clone, Copy)]
 pub struct House {
@@ -30,14 +30,13 @@ pub struct HouseVec(Option<Vec<House>>);
 
 #[derive(Resource)]
 pub struct BorderPixels {
-    pixels: Box<Vec<Vec<(u16, u16)>>>, // Updated to use Box<Vec<Vec<(u16, u16)>>>
+    pixels: Vec<Vec<(u16, u16)>>
 }
 
 impl BorderPixels {
     pub fn new() -> Self {
-        let pixels = vec![vec![(1001, 1001); HEIGHT as usize]; WIDTH as usize];
         Self {
-            pixels: Box::new(pixels),
+            pixels: vec![vec![(1001, 1001); HEIGHT as usize]; WIDTH as usize],
         }
     }
 }
@@ -66,13 +65,17 @@ fn main() {
         .run();
 }
 
+pub struct Vertex {
+    pos: (usize, usize), // x and y coords of where that particular vertex is
+    id: u64,
+}
+
 fn get_border_points(
     pixels: ResMut<BorderPixels>, // Updated to use the new structure
     mut images: ResMut<Assets<Image>>,
     keys: Res<ButtonInput<KeyCode>>,
     id: Res<ImageHandleRes>,
 ) {
-
     if !keys.just_pressed(KeyCode::ArrowRight) {
         return;
     }
@@ -90,47 +93,66 @@ fn get_border_points(
             break;
         }
     }
-    
+
     if start_pixel.is_none() {
         println!("No non-default pixels found.");
         return;
     }
-    
+
     let (x, y, nearest) = start_pixel.unwrap();
-    println!("First non-default pixel found at ({}, {}): {:?}", x, y, nearest);
+    println!(
+        "First non-default pixel found at ({}, {}): {:?}",
+        x, y, nearest
+    );
 
     // wether the pixels have been visited yet
     let mut visited = vec![vec![false; HEIGHT as usize]; WIDTH as usize]; // Updated to use Vec<Vec<bool>>
 
-    // the queue that has the pixels x and y, 
+    // the queue that has the pixels x and y,
     // along with the previous pixels nearest
     let mut queue: VecDeque<(usize, usize, (u16, u16))> = VecDeque::new();
 
     // x and y coordinate of the vertex
-    let mut verteces: Vec<(usize, usize)> = Vec::new();
+    let mut verteces: Vec<Vertex> = Vec::new();
 
     queue.push_back((x, y, nearest));
 
     while let Some(pixel) = queue.pop_front() {
         let (px, py, nearest) = pixel;
-    
+
         for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
             let nx = px as isize + dx;
             let ny = py as isize + dy;
-    
+
             if nx >= 0 && nx < WIDTH as isize && ny >= 0 && ny < HEIGHT as isize {
                 let nx = nx as usize;
                 let ny = ny as usize;
-    
-                if !visited[nx][ny] && !(pixels.pixels[nx][ny] == (1001, 1001)) {
+
+                if !visited[nx][ny] && pixels.pixels[nx][ny] != (1001, 1001) {
                     visited[nx][ny] = true; // Mark as visited before adding to the queue
-    
+
                     if pixels.pixels[nx][ny] != (nearest.0, nearest.1)
                         && pixels.pixels[nx][ny] != (nearest.1, nearest.0)
                     {
-                        verteces.push((nx, ny)); // Push the correct vertex
+                        let mut vertex_houses = [
+                            nearest.0,
+                            nearest.1,
+                            pixels.pixels[nx][ny].0,
+                            pixels.pixels[nx][ny].1,
+                        ];
+                        vertex_houses.sort_unstable();
+
+                        let mut id = 0;
+
+                        // make the smallest number possible
+                        for i in (0..4).rev() {
+                            id += (vertex_houses[i] as u64) << (16 * i);
+                        }
+
+                        if let Err(pos) = verteces.binary_search_by(|a| a.id.cmp(&id)) {
+                            verteces.insert(pos, Vertex { id, pos: (nx, ny) }); // Push the correct vertex
+                        }
                     }
-    
                     queue.push_back((nx, ny, pixels.pixels[nx][ny]));
                 }
             }
@@ -138,15 +160,16 @@ fn get_border_points(
     }
 
     if let Some(image) = images.get_mut(&Handle::Weak(id.0)) {
-        for (vx, vy) in verteces {
+        for vertex in verteces {
             for dx in 0..5 {
                 for dy in 0..5 {
-                    let nx = vx + dx;
-                    let ny = vy + dy;
-    
+                    let nx = vertex.pos.0 + dx;
+                    let ny = vertex.pos.1 + dy;
+
                     if nx < WIDTH as usize && ny < HEIGHT as usize {
                         let start = (nx + (ny * WIDTH as usize)) * 4;
-                        image.data[start..start + 4].copy_from_slice(&[255, 0, 0, 255]); // Red color
+                        image.data[start..start + 4].copy_from_slice(&[200, 255, 20, 255]);
+                        // Red color
                     }
                 }
             }
@@ -155,25 +178,26 @@ fn get_border_points(
 }
 
 pub struct NearestHouses {
-    nearest: Vec<(usize, f32)>
+    nearest: Vec<(usize, f32)>,
 }
 
 impl NearestHouses {
     pub fn new() -> Self {
-        return Self { nearest: Vec::new() };
+        Self {
+            nearest: Vec::new(),
+        }
     }
-    
+
     pub fn add(&mut self, point: (usize, f32)) {
-   
         if self.nearest.is_empty() {
             self.nearest.push(point);
             return;
         }
 
-
         // sort into ascending distance
         self.nearest.push(point);
-        self.nearest.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        self.nearest
+            .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let nearest_point = self.nearest[0];
 
@@ -188,8 +212,7 @@ impl NearestHouses {
         }
     }
 
-    pub fn is_border (&self, points: &Vec<House>) -> bool {
-
+    pub fn is_border(&self, points: &[House]) -> bool {
         if self.nearest.len() <= 1 {
             return false;
         };
@@ -202,11 +225,10 @@ impl NearestHouses {
             }
         }
 
-        return false
-
+        false
     }
 
-    pub fn get_houses(&self, points: &Vec<House>) -> Option<[(usize, f32); 2]> {
+    pub fn get_houses(&self, points: &[House]) -> Option<[(usize, f32); 2]> {
         if self.nearest.len() <= 1 {
             return None;
         };
@@ -220,7 +242,7 @@ impl NearestHouses {
             }
         }
 
-        return None
+        None
     }
 }
 
@@ -242,7 +264,6 @@ fn draw_borders(
                 // Use rayon's parallel iterator to process rows in parallel
                 (0..HEIGHT).into_par_iter().for_each(|y| {
                     for x in 0..WIDTH {
-
                         let mut nearest: NearestHouses = NearestHouses::new();
                         let x = x as f32;
                         let y = y as f32;
@@ -253,15 +274,15 @@ fn draw_borders(
                             nearest.add((i, dist));
                         }
 
-                        if nearest.is_border(&vec)
-                        {
+                        if nearest.is_border(vec) {
                             let nx = x as usize;
                             let ny = y as usize;
 
-                            let nearest_houses = nearest.get_houses(&vec).unwrap();
+                            let nearest_houses = nearest.get_houses(vec).unwrap();
 
                             let mut pixels_data = pixels_data.lock().unwrap();
-                            pixels_data[nx][ny] = (nearest_houses[0].0 as u16, nearest_houses[1].0 as u16);
+                            pixels_data[nx][ny] =
+                                (nearest_houses[0].0 as u16, nearest_houses[1].0 as u16);
 
                             if nx < WIDTH as usize && ny < HEIGHT as usize {
                                 let start = (nx + (ny * WIDTH as usize)) * 4;
@@ -295,7 +316,7 @@ fn setup(mut commands: Commands, mut vec: ResMut<HouseVec>, mut images: ResMut<A
 
     vec.0 = Some(Vec::new());
 
-    for _ in 0..750 {
+    for _ in 0..5000 {
         let x: f32 = rng.random_range(0.0..WIDTH_F32);
         let y: f32 = rng.random_range(0.0..HEIGHT_F32);
 
